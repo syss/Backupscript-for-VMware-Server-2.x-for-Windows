@@ -1,0 +1,296 @@
+@echo off
+rem ******************************************
+rem * Developed by Stefan Süss
+rem * www.sysstem.at
+rem ******************************************
+
+rem ******************************************
+rem * Needed to use exteneded variables --> !my_var%another_var%!
+rem * located at beginning of file to avoid saving variables
+rem ******************************************
+
+setLocal EnableDelayedExpansion
+
+rem ******************************************
+rem * Declaration of User Variables
+rem ******************************************
+
+set _user=Administrator
+set _pass=password
+set _datastore=[Datastore2]
+set _online=yes
+set _vmdir=G:\VM_DATASTORE2
+set _backupdir=G:\Backup\VM
+set secondbackup=\\server2\E$\Backup\svnlvm1
+set email=stefan.suess@sysstem.at
+set smtp=smtp.sysstem.at
+set vmwarevixdir=%ProgramFiles(x86)%\VMware\VMware VIX\
+
+set robolog=C:\robolog.log
+set logfile=C:\backup.log
+
+rem ******************************************
+rem * Declaration of User Variables
+rem ******************************************
+rem *
+rem * NO NEED TO CHANGE ANYTHING BELOW HERE
+rem *
+rem ******************************************
+rem * Known Error Messages during devolopement and testing
+rem ******************************************
+
+set version=1.04
+set errmsg1=Error: Unknown error
+set errmsg2=Error: Insufficient permissions in host operating system
+
+rem ******************************************
+rem * Flag for checking if there was a backup done
+rem ******************************************
+
+set backup=0
+set state=OK
+
+rem ******************************************
+rem * CD to standard dir of vmware vix (may vary in some cases)
+rem ******************************************
+
+pushd "%vmwarevixdir%"
+
+rem ******************************************
+rem * Check parameters
+rem ******************************************
+
+
+set user=%1
+if not defined user (
+rem	set /P user="Please enter User: "
+	if not defined user (set user=%_user%)
+)
+
+set pass=%2
+if not defined pass (
+rem	set /P pass="Please enter Password: "
+	if not defined pass (set pass=%_pass%)
+)
+
+set datastore=%3
+if not defined datastore (
+rem	set /P datastore="Please enter Datastore: "
+	if not defined datastore (set datastore=%_datastore%)
+)
+
+set online=%4
+if not defined online (
+rem	set /P online="Backup online Servers only (yes)?: "
+	if not defined online (set online=%_online%)
+	if !online! == no (set list=listRegisteredVM) else (set list=list)
+)
+
+set vmdir=%5
+if not defined vmdir (
+rem	set /P vmdir="Please enter the Directory of the VMs: "
+	if not defined vmdir (set vmdir=%_vmdir%)
+)
+
+set backupdir=%6
+if not defined backupdir (
+rem	set /P backupdir="Please enter the Directory for the Backupfiles: "
+	if not defined backupdir (set backupdir=%_backupdir%)
+)
+
+rem ******************************************
+rem * Remove Quotes
+rem ******************************************
+CALL :DeQuote datastore
+CALL :DeQuote vmdir
+CALL :DeQuote backupdir
+
+echo [!time:~0,8!] ==================================================================== > %logfile%
+echo [!time:~0,8!] =======================Version: %version%================================ >> %logfile%
+echo [!time:~0,8!] ==================================================================== >> %logfile%
+echo [!time:~0,8!] Call: %0 %user% *hidden* %datastore% %online% %vmdir% %backupdir% >> %logfile%
+
+rem ******************************************
+rem * Save length of Datastore in datastorelength
+rem * Source: http://cypressor.twoday.net/stories/4479271/
+rem ******************************************
+
+:STRLEN_LOOP
+SET /A I += 1
+IF NOT "!datastore!" == "" IF NOT "!datastore!" == "!datastore:~0,%I%!" (
+    GOTO :STRLEN_LOOP
+)
+SET datastorelength=!I!
+
+rem ******************************************
+echo [!time:~0,8!] ==================================================================== >> %logfile%
+echo [!time:~0,8!] Backup VMs from Server %computername% >> %logfile%
+echo [!time:~0,8!] ==================================================================== >> %logfile%
+set line=Backup all online
+if !online! == no set line=!line! and offline
+set line=!line! Machines from Datastore !datastore!
+echo [!time:~0,8!] !line! >> %logfile%
+echo [!time:~0,8!] Copy from %vmdir% to %backupdir% >> %logfile%
+echo [!time:~0,8!] ==================================================================== >> %logfile%
+rem ******************************************
+rem ******************************************
+rem * For Loop for all VMs
+rem ******************************************
+for /f "tokens=* delims= " %%a in (
+	'call vmrun -T server -h https://127.0.0.1:8333/sdk -u %user% -p %pass% %list%'
+) do (
+
+rem ******************************************
+rem * Helpvariables, because %%a with parameters
+rem * could not resolve properly
+rem ******************************************
+
+if %%a == !errmsg2! goto nopermission
+
+set help1=%%a
+set help2=!help1:~0,%datastorelength%!
+
+rem ******************************************
+rem * Foldername of the VM
+rem * 2nd token. delimiter: '/' and ']
+rem * [datastore] FOLDER NAME/vmxname.vmx
+rem ******************************************
+for /f "tokens=2 delims=]/" %%c in ("%%a") do set help3=%%c
+rem ******************************************
+rem Remove leading SPACE from " FOLDER NAME" (foldername ist without quotes)
+rem ******************************************
+set help3=!help3:~1!
+
+if !help2! == !datastore! (
+		echo ====================================================================
+		echo %%a
+		echo ====================================================================
+		echo [!time:~0,8!] ==================================================================== >> %logfile%
+		echo [!time:~0,8!] Starting Backup Routine for >> %logfile%
+		echo [!time:~0,8!] %%a >> %logfile%
+		rem softshutdown
+			echo Send Suspend for Server
+			echo [!time:~0,8!] Send Suspend >> %logfile%
+			for /f "tokens=* delims= " %%b in (
+				'call vmrun -T server -h https://127.0.0.1:8333/sdk -u %user% -p %pass% suspend "%%a"'
+			) do (
+				if %%b == !errmsg1!   (
+					echo [!time:~0,8!] %%b >> %logfile%
+					echo [!time:~0,8!] Softshutdown did not work. VMware Tools installed? >> %logfile%
+					echo [!time:~0,8!] Send Hardshutdown >> %logfile%
+					echo Softshutdown did not work. VMware Tools installed?
+					echo Send Hardshutdown for Server
+					call vmrun -T server -h https://127.0.0.1:8333/sdk -u %user% -p %pass% stop "%%a" hard
+					echo [!time:~0,8!] Server shut down hard >> %logfile%
+				) else echo [!time:~0,8!] Server shut down soft >> %logfile%
+				
+			)
+		rem backup
+			echo Backup Server
+			echo Copying the VMData. This may take a while
+			set backup=1
+			echo [!time:~0,8!] Copy Data from %vmdir%\!help3! to %backupdir%\!help3! >> %logfile%
+			robocopy "%vmdir%\!help3!" "%backupdir%\!help3!" /MIR /R:1 /w:5 /log:%robolog% /xf *_data.vmdk /np
+rem ******************************************
+rem errorlevel= ERROR when 4/8/16/32/...
+rem arithmetic operation: errorlvl modulo 4
+rem ******************************************			
+			set /a errlvl=!errorlevel!%4
+			if !errlvl! equ 0 (
+				echo ERROR while copying VM data
+				set state=NOT OK
+				set msg=: Robocopy failed or File_Dir Mismatch
+			)
+			type %robolog% >> %logfile%
+			echo Finished Backup
+			echo [!time:~0,8!] Finished Backup  >> %logfile%
+
+		rem start
+rem		if !online! == no (
+rem			echo Server will not start
+rem		) else (
+			echo Start Server
+			echo [!time:~0,8!] Start Server >> %logfile%
+			call vmrun -T server -h https://127.0.0.1:8333/sdk -u %user% -p %pass% start "%%a" nogui
+			echo [!time:~0,8!] Server started >> %logfile%
+rem		)
+		
+		
+	)
+
+)
+
+rem ******************************************
+rem * If Backup was finished, successmessage
+rem ******************************************
+if %backup%==1 (
+	echo ============================================================================== >> %logfile%
+	echo ============================================================================== >> %logfile%
+	echo Finished all Backups
+	echo [!time:~0,8!] Finished all Backups >> %logfile%
+	echo ============================================================================== >> %logfile%
+	echo ============================================================================== >> %logfile%
+
+	if defined secondbackup (
+		rem ******************************************
+		rem * Simple copy Job to backup the VM Backups
+		rem * on the other server
+		rem ******************************************
+
+		echo [!time:~0,8!] ==================================================================== >> %logfile%
+		echo Copy Backups to other Server >> %logfile%
+		echo [!time:~0,8!] ==================================================================== >> %logfile%
+		robocopy "%backupdir%" "%secondbackup%" /MIR /R:1 /w:5 /log:%robolog% /xf *_data.vmdk /np
+		type %robolog% >> %logfile%
+		echo [!time:~0,8!] ==================================================================== >> %logfile%
+		echo [!time:~0,8!] Finished copying all Backups to other Server >> %logfile%
+		echo [!time:~0,8!] ==================================================================== >> %logfile%
+	)
+)
+if %backup%==0 (
+	echo There were no Backups done. Maybe VMs are not running or wrong Datastore. Check Logfile %logfile%
+	echo There were no Backups done. Maybe VMs are not running or wrong Datastore. >> %logfile%
+	set state=NOT OK
+	set msg=: No backups done. Check datastore.
+)
+goto end
+
+:nopermission
+	echo [!time:~0,8!] !help1! >> %logfile%
+	echo Check Login Password and Permissions. Check Logfile %logfile%
+	set state=NOT OK
+	set msg=: Check Login Password and Permissions
+	goto end
+
+
+:checkparams
+	echo [!time:~0,8!] please check your Paramters > %logfile%
+	echo [!time:~0,8!] %0 User Password Datastore OnlineMachinesOnly VMdir Backupdir >> %logfile%
+	echo Check your Params and your Logfile!
+	set state=NOT OK
+	set msg=: Parameter Missmatch
+	goto end
+
+rem ******************************************
+rem * Removes Quotes
+rem * http://ss64.com/nt/syntax-dequote.html
+rem ******************************************
+
+:DeQuote
+
+SET _DeQuoteVar=%1
+CALL SET _DeQuoteString=%%!_DeQuoteVar!%%
+IF [!_DeQuoteString:~0^,1!]==[^"] (
+IF [!_DeQuoteString:~-1!]==[^"] (SET _DeQuoteString=!_DeQuoteString:~1,-1!
+) ELSE (GOTO :EOF)
+) ELSE (GOTO :EOF)
+SET !_DeQuoteVar!=!_DeQuoteString!
+SET _DeQuoteVar=
+SET _DeQuoteString=
+GOTO :EOF
+
+:end
+	set state=%state%%msg%
+	smtpsend -fVMB_%computername%@sysstem.at -t%email% -i%logfile% -sBackup from %computername% was !state! -h%smtp%
+	erase %robolog% %logfile%
+	popd
